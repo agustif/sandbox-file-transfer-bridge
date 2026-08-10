@@ -1,0 +1,63 @@
+name: Transfer request
+description: Request an approved file transfer into ChatGPT sandbox via Actions artifact
+title: "transfer: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Request **inert bytes** for offline sandbox use. Maintainers must apply `approved-transfer` before any download runs.
+
+        **v1 supported type:** `fetch` (HTTPS URL + required SHA-256).
+
+        Trust boundary:
+
+        ```text
+        you → pending issue → maintainer approval → networked fetch → Actions artifact → /mnt/data
+        ```
+
+  - type: textarea
+    id: request_json
+    attributes:
+      label: Transfer request JSON
+      description: Single fenced JSON object. Never put shell commands here.
+      value: |
+        ```json
+        {
+          "schema": 1,
+          "kind": "artifact-request",
+          "name": "example-fetch",
+          "type": "fetch",
+          "payload": {
+            "url": "https://example.com/file.tar.gz",
+            "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "output": "file.tar.gz",
+            "max_bytes": 104857600
+          }
+        }
+        ```
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes for maintainers (optional)
+      description: Why this file is needed, expected use in the sandbox, compatibility notes.
+    validations:
+      required: false
+
+  - type: markdown
+    attributes:
+      value: |
+        ### Rules (v1)
+
+        | Rule | Detail |
+        | --- | --- |
+        | HTTPS only | No `http://`, no credentials in URL |
+        | SHA-256 required | Transfer fails closed on mismatch |
+        | Output filename | Plain name, no paths (`file.tar.gz`) |
+        | Size | Default max 512 MiB; hard cap 2 GiB |
+        | No execution | Runner never runs the downloaded blob |
+
+        Future types (`apt`, `oci-rootfs`, …) will use the same approval door.

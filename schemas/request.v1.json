@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/agustif/sandbox-file-transfer-bridge/schemas/request.v1.json",
+  "title": "Sandbox file transfer request v1",
+  "type": "object",
+  "required": ["schema", "kind", "name", "type", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "const": 1 },
+    "kind": { "const": "artifact-request" },
+    "name": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9._-]{1,64}$"
+    },
+    "type": {
+      "type": "string",
+      "enum": ["fetch"]
+    },
+    "payload": {
+      "type": "object"
+    },
+    "notes": {
+      "type": "string",
+      "maxLength": 2000
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "type": { "const": "fetch" } }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["url", "sha256", "output"],
+            "additionalProperties": false,
+            "properties": {
+              "url": {
+                "type": "string",
+                "pattern": "^https://"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{64}$"
+              },
+              "output": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9._-]{1,128}$"
+              },
+              "max_bytes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483648
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+/artifacts/
+/tmp/
+/test-*/
+*.tar.gz
+!scripts/**
+.DS_Store
+__pycache__/
+*.pyc
+.idea/
+.vscode/
