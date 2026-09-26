@@ -12,6 +12,9 @@ so later sandboxes can re-materialize without re-downloading from Actions.
   SHA256SUMS
 ```
 
+For chunked transfers, cache the reassembled, verified file (or the manifest
+artifact plus all parts) under the same key.
+
 Or by human name + content hash:
 
 ```text

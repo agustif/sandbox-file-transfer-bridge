@@ -25,6 +25,11 @@ MAX_OUTPUT_LEN = 128
 MAX_NOTES_LEN = 2000
 DEFAULT_MAX_BYTES = 512 * 1024 * 1024  # 512 MiB default
 ABSOLUTE_MAX_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB hard cap
+# Files larger than chunk_bytes are split into parts, one Actions artifact each
+# (downstream sandboxes cannot download a single artifact > 512 MiB).
+DEFAULT_CHUNK_BYTES = 400 * 1024 * 1024  # 400 MiB
+MIN_CHUNK_BYTES = 1 * 1024 * 1024  # 1 MiB
+MAX_CHUNK_BYTES = 450 * 1024 * 1024  # 450 MiB: stays < 512 MiB after zip overhead
 
 # Optional host allowlist. Empty = any HTTPS host (still requires sha256).
 # Maintainers can tighten this list in-repo without changing the parser API.
@@ -76,7 +81,7 @@ def validate_fetch_payload(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise RequestError("payload must be an object")
 
-    allowed_keys = {"url", "sha256", "output", "max_bytes"}
+    allowed_keys = {"url", "sha256", "output", "max_bytes", "chunk_bytes"}
     unknown = set(payload.keys()) - allowed_keys
     if unknown:
         raise RequestError(f"payload has unsupported keys: {sorted(unknown)}")
@@ -115,13 +120,26 @@ def validate_fetch_payload(payload: Any) -> dict[str, Any]:
     if max_bytes < 1 or max_bytes > ABSOLUTE_MAX_BYTES:
         raise RequestError(f"payload.max_bytes out of range (1..{ABSOLUTE_MAX_BYTES})")
 
-    return {
+    result = {
         "url": url,
         "sha256": sha256,
         "output": output,
         "max_bytes": max_bytes,
         "host": host,
     }
+
+    # Optional; only included when given so existing request hashes stay stable.
+    if "chunk_bytes" in payload:
+        chunk_bytes = payload["chunk_bytes"]
+        if not isinstance(chunk_bytes, int) or isinstance(chunk_bytes, bool):
+            raise RequestError("payload.chunk_bytes must be an integer")
+        if chunk_bytes < MIN_CHUNK_BYTES or chunk_bytes > MAX_CHUNK_BYTES:
+            raise RequestError(
+                f"payload.chunk_bytes out of range ({MIN_CHUNK_BYTES}..{MAX_CHUNK_BYTES})"
+            )
+        result["chunk_bytes"] = chunk_bytes
+
+    return result
 
 
 def validate_request(data: dict[str, Any]) -> dict[str, Any]:
@@ -202,7 +220,10 @@ def main() -> None:
         print(f"  request_sha256={request['request_sha256']}")
         if request["type"] == "fetch":
             p = request["payload"]
-            print(f"  host={p['host']} output={p['output']} max_bytes={p['max_bytes']}")
+            print(
+                f"  host={p['host']} output={p['output']} max_bytes={p['max_bytes']}"
+                f" chunk_bytes={p.get('chunk_bytes', DEFAULT_CHUNK_BYTES)}"
+            )
 
 
 if __name__ == "__main__":

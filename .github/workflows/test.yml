@@ -1,0 +1,32 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  chunking:
+    name: Chunking split / manifest / reassembly (offline)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax checks
+        run: |
+          set -euo pipefail
+          bash -n scripts/*.sh
+          python3 -m py_compile scripts/parse-request.py scripts/split-transfer.py
+
+      - name: Lint workflows (actionlint)
+        run: |
+          set -euo pipefail
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint -color -shellcheck=
+
+      - name: Chunking tests (synthetic file, tiny chunk size, no external downloads)
+        run: ./scripts/test-chunking.sh

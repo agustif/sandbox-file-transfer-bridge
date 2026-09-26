@@ -52,6 +52,12 @@
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 2147483648
+              },
+              "chunk_bytes": {
+                "type": "integer",
+                "minimum": 1048576,
+                "maximum": 471859200,
+                "description": "Split threshold / part size. Default 419430400 (400 MiB)."
               }
             }
           }

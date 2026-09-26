@@ -91,7 +91,8 @@ jobs:
         id: parse
         run: |
           set -euo pipefail
-          chmod +x scripts/parse-request.py scripts/fetch-and-package.sh scripts/verify-transfer.sh
+          chmod +x scripts/parse-request.py scripts/fetch-and-package.sh scripts/verify-transfer.sh \
+            scripts/split-transfer.py scripts/reassemble.sh
           python3 scripts/parse-request.py \
             issue-body.txt \
             --out-request work/request.json
@@ -123,24 +124,235 @@ jobs:
               ;;
           esac
           ARTIFACT_NAME=$(cat "$OUT/artifact-name.txt")
-          ARCHIVE_SHA=$(python3 -c 'import json; print(json.load(open("'"$OUT"'/manifest.json"))["sha256"])')
-          OUTPUT_NAME=$(python3 -c 'import json; print(json.load(open("'"$OUT"'/manifest.json"))["output"])')
-          echo "out_dir=$OUT" >> "$GITHUB_OUTPUT"
-          echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
-          echo "archive_sha=$ARCHIVE_SHA" >> "$GITHUB_OUTPUT"
-          echo "output_name=$OUTPUT_NAME" >> "$GITHUB_OUTPUT"
-          ls -lh "$OUT"
+          MODE=$(cat "$OUT/mode.txt")
+          if [[ "$MODE" == chunked ]]; then
+            M="$OUT/manifest/manifest.json"
+            ARCHIVE_SHA="(chunked: no archive)"
+            OUTPUT_SHA=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$M")
+            OUTPUT_NAME=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["output"])' "$M")
+            PART_COUNT=$(cat "$OUT/part-count.txt")
+          else
+            M="$OUT/manifest.json"
+            ARCHIVE_SHA=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$M")
+            OUTPUT_SHA=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["output_sha256"])' "$M")
+            OUTPUT_NAME=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["output"])' "$M")
+            PART_COUNT=0
+          fi
+          {
+            echo "out_dir=$OUT"
+            echo "mode=$MODE"
+            echo "part_count=$PART_COUNT"
+            echo "manifest_path=$M"
+            echo "artifact_name=$ARTIFACT_NAME"
+            echo "archive_sha=$ARCHIVE_SHA"
+            echo "output_sha=$OUTPUT_SHA"
+            echo "output_name=$OUTPUT_NAME"
+          } >> "$GITHUB_OUTPUT"
+          ls -lhR "$OUT"
 
       - name: Verify packaged artifact
+        if: steps.pack.outputs.mode == 'single'
         run: |
           set -euo pipefail
           ./scripts/verify-transfer.sh "${{ steps.pack.outputs.out_dir }}"
 
+      - name: Verify chunked parts reassemble
+        if: steps.pack.outputs.mode == 'chunked'
+        run: |
+          set -euo pipefail
+          OUT="${{ steps.pack.outputs.out_dir }}"
+          CHECK="${RUNNER_TEMP}/reassemble-check"
+          rm -rf "$CHECK"
+          (cd "$OUT/manifest" && sha256sum -c SHA256SUMS)
+          bash "$OUT/manifest/reassemble.sh" "$OUT/parts" "$CHECK"
+          rm -rf "$CHECK"
+          # Every part must stay well under the 512 MiB per-artifact download limit.
+          for f in "$OUT"/parts/*; do
+            size=$(stat -c %s "$f")
+            echo "$(basename "$f"): $size bytes"
+            if [[ "$size" -gt $((450 * 1024 * 1024)) ]]; then
+              echo "error: part $f is $size bytes (> 450 MiB)" >&2
+              exit 1
+            fi
+          done
+
       - name: Upload transfer artifact
+        if: steps.pack.outputs.mode == 'single'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.pack.outputs.artifact_name }}
           path: ${{ steps.pack.outputs.out_dir }}/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+      - name: Upload chunk manifest
+        if: steps.pack.outputs.mode == 'chunked'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.artifact_name }}-manifest
+          path: ${{ steps.pack.outputs.out_dir }}/manifest/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+      # One step per possible part (split-transfer.py MAX_PARTS = 16); unused steps are skipped.
+      - name: Upload part 000
+        if: steps.pack.outputs.mode == 'chunked' && fromJSON(steps.pack.outputs.part_count) > 0
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.artifact_name }}-part000
+          path: ${{ steps.pack.outputs.out_dir }}/parts/${{ steps.pack.outputs.output_name }}.part000
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+      - name: Upload part 001
+        if: steps.pack.outputs.mode == 'chunked' && fromJSON(steps.pack.outputs.part_count) > 1
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.artifact_name }}-part001
+          path: ${{ steps.pack.outputs.out_dir }}/parts/${{ steps.pack.outputs.output_name }}.part001
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+      - name: Upload part 002
+        if: steps.pack.outputs.mode == 'chunked' && fromJSON(steps.pack.outputs.part_count) > 2
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.artifact_name }}-part002
+          path: ${{ steps.pack.outputs.out_dir }}/parts/${{ steps.pack.outputs.output_name }}.part002
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+      - name: Upload part 003
+        if: steps.pack.outputs.mode == 'chunked' && fromJSON(steps.pack.outputs.part_count) > 3
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.artifact_name }}-part003
+          path: ${{ steps.pack.outputs.out_dir }}/parts/${{ steps.pack.outputs.output_name }}.part003
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+      - name: Upload part 004
+        if: steps.pack.outputs.mode == 'chunked' && fromJSON(steps.pack.outputs.part_count) > 4
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.artifact_name }}-part004
+          path: ${{ steps.pack.outputs.out_dir }}/parts/${{ steps.pack.outputs.output_name }}.part004
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+      - name: Upload part 005
+        if: steps.pack.outputs.mode == 'chunked' && fromJSON(steps.pack.outputs.part_count) > 5
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.artifact_name }}-part005
+          path: ${{ steps.pack.outputs.out_dir }}/parts/${{ steps.pack.outputs.output_name }}.part005
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+      - name: Upload part 006
+        if: steps.pack.outputs.mode == 'chunked' && fromJSON(steps.pack.outputs.part_count) > 6
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.artifact_name }}-part006
+          path: ${{ steps.pack.outputs.out_dir }}/parts/${{ steps.pack.outputs.output_name }}.part006
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+      - name: Upload part 007
+        if: steps.pack.outputs.mode == 'chunked' && fromJSON(steps.pack.outputs.part_count) > 7
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.artifact_name }}-part007
+          path: ${{ steps.pack.outputs.out_dir }}/parts/${{ steps.pack.outputs.output_name }}.part007
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+      - name: Upload part 008
+        if: steps.pack.outputs.mode == 'chunked' && fromJSON(steps.pack.outputs.part_count) > 8
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.artifact_name }}-part008
+          path: ${{ steps.pack.outputs.out_dir }}/parts/${{ steps.pack.outputs.output_name }}.part008
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+      - name: Upload part 009
+        if: steps.pack.outputs.mode == 'chunked' && fromJSON(steps.pack.outputs.part_count) > 9
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.artifact_name }}-part009
+          path: ${{ steps.pack.outputs.out_dir }}/parts/${{ steps.pack.outputs.output_name }}.part009
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+      - name: Upload part 010
+        if: steps.pack.outputs.mode == 'chunked' && fromJSON(steps.pack.outputs.part_count) > 10
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.artifact_name }}-part010
+          path: ${{ steps.pack.outputs.out_dir }}/parts/${{ steps.pack.outputs.output_name }}.part010
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+      - name: Upload part 011
+        if: steps.pack.outputs.mode == 'chunked' && fromJSON(steps.pack.outputs.part_count) > 11
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.artifact_name }}-part011
+          path: ${{ steps.pack.outputs.out_dir }}/parts/${{ steps.pack.outputs.output_name }}.part011
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+      - name: Upload part 012
+        if: steps.pack.outputs.mode == 'chunked' && fromJSON(steps.pack.outputs.part_count) > 12
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.artifact_name }}-part012
+          path: ${{ steps.pack.outputs.out_dir }}/parts/${{ steps.pack.outputs.output_name }}.part012
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+      - name: Upload part 013
+        if: steps.pack.outputs.mode == 'chunked' && fromJSON(steps.pack.outputs.part_count) > 13
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.artifact_name }}-part013
+          path: ${{ steps.pack.outputs.out_dir }}/parts/${{ steps.pack.outputs.output_name }}.part013
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+      - name: Upload part 014
+        if: steps.pack.outputs.mode == 'chunked' && fromJSON(steps.pack.outputs.part_count) > 14
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.artifact_name }}-part014
+          path: ${{ steps.pack.outputs.out_dir }}/parts/${{ steps.pack.outputs.output_name }}.part014
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+      - name: Upload part 015
+        if: steps.pack.outputs.mode == 'chunked' && fromJSON(steps.pack.outputs.part_count) > 15
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.artifact_name }}-part015
+          path: ${{ steps.pack.outputs.out_dir }}/parts/${{ steps.pack.outputs.output_name }}.part015
           if-no-files-found: error
           retention-days: 90
           compression-level: 0
@@ -157,10 +369,21 @@ jobs:
             echo "| Issue | #${{ github.event.issue.number }} |"
             echo "| Name | \`${{ steps.parse.outputs.name }}\` |"
             echo "| Type | \`${{ steps.parse.outputs.type }}\` |"
+            echo "| Mode | \`${{ steps.pack.outputs.mode }}\` |"
             echo "| Artifact | \`${{ steps.pack.outputs.artifact_name }}\` |"
             echo "| Archive SHA-256 | \`${{ steps.pack.outputs.archive_sha }}\` |"
             echo "| Output file | \`${{ steps.pack.outputs.output_name }}\` |"
+            echo "| Output SHA-256 | \`${{ steps.pack.outputs.output_sha }}\` |"
             echo ""
+            if [[ "${{ steps.pack.outputs.mode }}" == chunked ]]; then
+              echo "### Parts (download all + \`${{ steps.pack.outputs.artifact_name }}-manifest\`)"
+              echo ""
+              echo "| Artifact | Part | Bytes | SHA-256 |"
+              echo "| --- | --- | --- | --- |"
+              jq -r '.parts[] | "| `\(.artifact)` | `\(.name)` | \(.size) | `\(.sha256)` |"' \
+                "${{ steps.pack.outputs.manifest_path }}"
+              echo ""
+            fi
             echo "Door: Actions artifact ZIP → GitHub connector → \`/mnt/data\`."
             echo "Runner never executes the payload."
           } >> "$GITHUB_STEP_SUMMARY"
@@ -170,6 +393,8 @@ jobs:
         uses: actions/github-script@v7
         env:
           ARTIFACT_NAME: ${{ steps.pack.outputs.artifact_name }}
+          MODE: ${{ steps.pack.outputs.mode }}
+          MANIFEST_PATH: ${{ steps.pack.outputs.manifest_path }}
           ARCHIVE_SHA: ${{ steps.pack.outputs.archive_sha }}
           OUTPUT_NAME: ${{ steps.pack.outputs.output_name }}
           REQ_NAME: ${{ steps.parse.outputs.name }}
@@ -178,7 +403,56 @@ jobs:
         with:
           script: |
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            const body = [
+            let body;
+            if (process.env.MODE === 'chunked') {
+              const fs = require('fs');
+              const m = JSON.parse(fs.readFileSync(process.env.MANIFEST_PATH, 'utf8'));
+              const base = process.env.ARTIFACT_NAME;
+              const partRows = m.parts.map(
+                (p) => `| \`${p.artifact}\` | \`${p.name}\` | ${p.size} | \`${p.sha256}\` |`
+              );
+              body = [
+                '## ✅ Chunked transfer artifacts ready',
+                '',
+                `The file is ${m.size} bytes, larger than the chunk threshold (${m.chunk_bytes} bytes), so it was split into ${m.part_count} parts.`,
+                'Each part is its own Actions artifact, so every download stays under 512 MiB.',
+                '',
+                '| Field | Value |',
+                '| --- | --- |',
+                `| Workflow run | ${runUrl} |`,
+                `| Manifest artifact | \`${m.manifest_artifact}\` |`,
+                `| Part artifacts | \`${base}-part000\` … \`${m.parts[m.parts.length - 1].artifact}\` (${m.part_count}) |`,
+                `| Request name | \`${process.env.REQ_NAME}\` |`,
+                `| Type | \`${process.env.REQ_TYPE}\` |`,
+                `| Request SHA-256 | \`${process.env.REQ_SHA}\` |`,
+                `| Output file | \`${m.output}\` |`,
+                `| Output size | ${m.size} bytes |`,
+                `| Output SHA-256 | \`${m.sha256}\` |`,
+                '',
+                '### Parts (reassemble in this order)',
+                '',
+                '| Artifact | Part file | Bytes | SHA-256 |',
+                '| --- | --- | --- | --- |',
+                ...partRows,
+                '',
+                '### Sandbox usage',
+                '',
+                `1. Download all ${m.part_count + 1} artifact ZIPs from this run into \`/mnt/data\`: \`${m.manifest_artifact}\` and every \`${base}-partNNN\` above.`,
+                '2. Unzip each into its own directory, e.g.:',
+                '   ```bash',
+                `   cd /mnt/data && mkdir -p xfer && for z in ${base}-*.zip; do unzip -o "$z" -d "xfer/\${z%.zip}"; done`,
+                '   ```',
+                '3. Reassemble and verify (checks every part sha256, cats parts in order, checks the full-file sha256):',
+                '   ```bash',
+                `   bash /mnt/data/xfer/${m.manifest_artifact}/reassemble.sh /mnt/data/xfer /mnt/data`,
+                `   # -> /mnt/data/${m.output}`,
+                '   ```',
+                '   Manual equivalent: `cat` the parts in order into the output file, then `sha256sum` each part and the result against the table above.',
+                '',
+                'These are **inert bytes**; the sandbox unpacks and uses them.',
+              ].join('\n');
+            } else {
+            body = [
               '## ✅ Transfer artifact ready',
               '',
               `| Field | Value |`,
@@ -201,6 +475,7 @@ jobs:
               '3. Verify: `sha256sum -c SHA256SUMS`',
               '4. Use the file as needed inside the sandbox.',
             ].join('\n');
+            }
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,

@@ -6,6 +6,13 @@
 #
 # Expects request.json produced by parse-request.py (type=fetch).
 # Uses curl for the download; verifies sha256; never executes the payload.
+#
+# Output modes (written to <out-dir>/mode.txt):
+#   single   file <= chunk_bytes: tar.gz + raw file + manifest + SHA256SUMS in
+#            <out-dir>, uploaded as one artifact transfer-issue-N-<hash>.
+#   chunked  file >  chunk_bytes: <out-dir>/parts/<output>.partNNN (one artifact
+#            each, transfer-issue-N-<hash>-partNNN) plus <out-dir>/manifest/
+#            (artifact transfer-issue-N-<hash>-manifest). See split-transfer.py.
 set -euo pipefail
 
 REQUEST_JSON=${1:-}
@@ -32,8 +39,12 @@ sha256_file() {
   fi
 }
 
-# Extract fields as shell-safe assignments
-eval "$(python3 - "$REQUEST_JSON" <<'PY'
+STAGE=$(mktemp -d)
+trap 'rm -rf "$STAGE"' EXIT
+
+# Extract fields as shell-safe assignments (written to a file first; avoids a
+# heredoc inside $(...), which macOS bash 3.2 mis-parses)
+python3 - "$REQUEST_JSON" >"$STAGE/vars.sh" <<'PY'
 import json, sys, shlex
 r = json.load(open(sys.argv[1], encoding="utf-8"))
 if r.get("type") != "fetch":
@@ -46,11 +57,9 @@ print(f"EXPECT_SHA={shlex.quote(p['sha256'])}")
 print(f"OUTPUT={shlex.quote(p['output'])}")
 print(f"MAX_BYTES={int(p['max_bytes'])}")
 print(f"HOST={shlex.quote(p['host'])}")
+print(f"CHUNK_BYTES={int(p.get('chunk_bytes', 400 * 1024 * 1024))}")
 PY
-)"
-
-STAGE=$(mktemp -d)
-trap 'rm -rf "$STAGE"' EXIT
+eval "$(cat "$STAGE/vars.sh")"
 PAYLOAD_PATH="$STAGE/$OUTPUT"
 
 echo "Fetching host=$HOST output=$OUTPUT max_bytes=$MAX_BYTES"
@@ -79,6 +88,44 @@ if [[ "$ACTUAL_SHA" != "$EXPECT_SHA" ]]; then
   exit 1
 fi
 echo "sha256 ok ($ACTUAL_SHA)"
+
+SHORT=${REQ_SHA:0:12}
+ARTIFACT_NAME="transfer-issue-${ISSUE_NUMBER}-${SHORT}"
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+
+if [[ "$ACTUAL_SIZE" -gt "$CHUNK_BYTES" ]]; then
+  echo "size $ACTUAL_SIZE > chunk_bytes $CHUNK_BYTES: splitting into parts"
+  REQ_NAME="$REQ_NAME" REQ_SHA="$REQ_SHA" ISSUE_NUMBER="$ISSUE_NUMBER" \
+    HOST="$HOST" URL="$URL" GIT_SHA="${GITHUB_SHA:-unknown}" python3 - >"$STAGE/meta.json" <<'PY'
+import datetime, json, os
+print(json.dumps({
+    "type": "fetch",
+    "name": os.environ["REQ_NAME"],
+    "request_issue": int(os.environ["ISSUE_NUMBER"]),
+    "request_sha256": os.environ["REQ_SHA"],
+    "host": os.environ["HOST"],
+    "source_url": os.environ["URL"],
+    "git_sha": os.environ["GIT_SHA"],
+    "created_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "notes": "Inert bytes only. Download every part artifact + the manifest artifact, then run reassemble.sh.",
+}))
+PY
+  python3 "$SCRIPT_DIR/split-transfer.py" "$PAYLOAD_PATH" "$OUT_DIR" \
+    --output "$OUTPUT" \
+    --artifact-base "$ARTIFACT_NAME" \
+    --chunk-bytes "$CHUNK_BYTES" \
+    --expect-sha256 "$ACTUAL_SHA" \
+    --request-json "$REQUEST_JSON" \
+    --reassemble-script "$SCRIPT_DIR/reassemble.sh" \
+    --meta "$(cat "$STAGE/meta.json")" \
+    ${SPLIT_EXTRA_ARGS:-}
+  echo chunked >"$OUT_DIR/mode.txt"
+  echo "$ARTIFACT_NAME" >"$OUT_DIR/artifact-name.txt"
+  echo "Wrote chunked transfer to $OUT_DIR"
+  echo "  artifact_base=$ARTIFACT_NAME parts=$(cat "$OUT_DIR/part-count.txt")"
+  echo "  file=$OUTPUT sha256=$ACTUAL_SHA size=$ACTUAL_SIZE"
+  exit 0
+fi
 
 ARCHIVE_NAME=transfer-payload.tar.gz
 mkdir -p "$STAGE/pkg"
@@ -133,8 +180,7 @@ PY
   echo "$(sha256_file "$OUT_DIR/request.json")  request.json"
 } >"$OUT_DIR/SHA256SUMS"
 
-SHORT=${REQ_SHA:0:12}
-ARTIFACT_NAME="transfer-issue-${ISSUE_NUMBER}-${SHORT}"
+echo single >"$OUT_DIR/mode.txt"
 echo "$ARTIFACT_NAME" >"$OUT_DIR/artifact-name.txt"
 
 echo "Wrote transfer artifact to $OUT_DIR"

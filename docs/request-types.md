@@ -22,7 +22,8 @@
 | `url` | yes | `https://` only; no credentials |
 | `sha256` | yes | Fails closed on mismatch |
 | `output` | yes | Basename only |
-| `max_bytes` | no | Default 512 MiB; max 2 GiB |
+| `max_bytes` | no | Default 512 MiB; max 2 GiB (applies to the full file) |
+| `chunk_bytes` | no | Split threshold and part size; default 400 MiB, range 1 MiB..450 MiB. Larger files become one artifact per part + a manifest artifact ([chunked-transfers.md](./chunked-transfers.md)) |
 
 ## Planned (not implemented)
 
