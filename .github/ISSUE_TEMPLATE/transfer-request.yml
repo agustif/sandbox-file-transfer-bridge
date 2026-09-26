@@ -58,6 +58,7 @@ body:
         | SHA-256 required | Transfer fails closed on mismatch |
         | Output filename | Plain name, no paths (`file.tar.gz`) |
         | Size | Default max 512 MiB; hard cap 2 GiB |
+        | Large files | > 400 MiB are split into part artifacts + a manifest (optional `chunk_bytes`) |
         | No execution | Runner never runs the downloaded blob |
 
         Future types (`apt`, `oci-rootfs`, …) will use the same approval door.
